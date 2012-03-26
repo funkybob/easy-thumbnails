@@ -8,7 +8,7 @@ from easy_thumbnails import engine, models, utils, exceptions
 import os
 from django.utils.http import urlquote
 
-try;
+try:
     from filebrowser.base import FileObject
 except ImportError:
     class FileObject(object):

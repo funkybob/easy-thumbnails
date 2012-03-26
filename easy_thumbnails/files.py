@@ -8,6 +8,11 @@ from easy_thumbnails import engine, models, utils, exceptions
 import os
 from django.utils.http import urlquote
 
+try;
+    from filebrowser.base import FileObject
+except ImportError:
+    class FileObject(object):
+        pass
 
 DEFAULT_THUMBNAIL_STORAGE = get_storage_class(
                                         utils.get_setting('DEFAULT_STORAGE'))()
@@ -49,6 +54,9 @@ def get_thumbnailer(obj, relative_name=None):
         if not relative_name:
             relative_name = obj.name
         return ThumbnailerFieldFile(obj.instance, obj.field, relative_name)
+    elif isinstance(obj, FileObject):
+        relative_name = obj.path
+        obj = obj.site.storage
 
     source_storage = None
 

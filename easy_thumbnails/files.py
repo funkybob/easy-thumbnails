@@ -2,11 +2,7 @@ from django.core.files.base import File, ContentFile
 from django.core.files.storage import get_storage_class, default_storage, \
     Storage
 from django.db.models.fields.files import ImageFieldFile, FieldFile
-from django.utils.html import escape
-from django.utils.safestring import mark_safe
-from easy_thumbnails import engine, models, utils, exceptions
 import os
-from django.utils.http import urlquote
 
 try:
     from filebrowser.base import FileObject
@@ -14,8 +10,13 @@ except ImportError:
     class FileObject(object):
         pass
 
-DEFAULT_THUMBNAIL_STORAGE = get_storage_class(
-                                        utils.get_setting('DEFAULT_STORAGE'))()
+from django.utils.safestring import mark_safe
+from django.utils.html import escape
+from django.utils.http import urlquote
+
+from easy_thumbnails import engine, exceptions, models, utils, signals
+from easy_thumbnails.alias import aliases
+from easy_thumbnails.conf import settings
 
 
 def get_thumbnailer(obj, relative_name=None):
@@ -33,7 +34,7 @@ def get_thumbnailer(obj, relative_name=None):
         * ``Storage`` instance - the ``relative_name`` argument must also be
           provided.
 
-    Or it could be::
+    Or it could be:
 
         * A file-like instance - the ``relative_name`` argument must also be
           provided.
@@ -91,6 +92,22 @@ def save_thumbnail(thumbnail_file, storage):
     return storage.save(filename, thumbnail_file)
 
 
+def generate_all_aliases(fieldfile, include_global):
+    """
+    Generate all of a file's aliases.
+
+    :param fieldfile: A ``FieldFile`` instance.
+    :param include_global: A boolean which determines whether to generate
+        thumbnails for project-wide aliases in addition to field, model, and
+        app specific aliases.
+    """
+    all_options = aliases.all(fieldfile, include_global=include_global)
+    if all_options:
+        thumbnailer = get_thumbnailer(fieldfile)
+        for options in all_options.values():
+            thumbnailer.get_thumbnail(options)
+
+
 class FakeField(object):
     name = 'fake'
 
@@ -113,13 +130,15 @@ class ThumbnailFile(ImageFieldFile):
     This can be used just like a Django model instance's property for a file
     field (i.e. an ``ImageFieldFile`` object).
     """
-    def __init__(self, name, file=None, storage=None, *args, **kwargs):
+    def __init__(self, name, file=None, storage=None, thumbnail_options=None,
+            *args, **kwargs):
         fake_field = FakeField(storage=storage)
         super(ThumbnailFile, self).__init__(FakeInstance(), fake_field, name,
-                                            *args, **kwargs)
+            *args, **kwargs)
         del self.field
         if file:
             self.file = file
+        self.thumbnail_options = thumbnail_options
 
     def _get_image(self):
         """
@@ -184,7 +203,7 @@ class ThumbnailFile(ImageFieldFile):
         return self._file
 
     def _set_file(self, value):
-        if value is None and not isinstance(value, File):
+        if value is not None and not isinstance(value, File):
             value = File(value)
         self._file = value
         self._committed = False
@@ -225,23 +244,9 @@ class Thumbnailer(File):
     You can subclass this object and override the following properties to
     change the defaults (pulled from the default settings):
 
-        * thumbnail_basedir
-        * thumbnail_subdir
-        * thumbnail_prefix
-        * thumbnail_quality
-        * thumbnail_extension
         * source_generators
         * thumbnail_processors
     """
-    thumbnail_basedir = utils.get_setting('BASEDIR')
-    thumbnail_subdir = utils.get_setting('SUBDIR')
-    thumbnail_prefix = utils.get_setting('PREFIX')
-    thumbnail_quality = utils.get_setting('QUALITY')
-    thumbnail_extension = utils.get_setting('EXTENSION')
-    thumbnail_preserve_extensions = utils.get_setting('PRESERVE_EXTENSIONS')
-    thumbnail_transparency_extension = utils.get_setting(
-                                                    'TRANSPARENCY_EXTENSION')
-    thumbnail_check_cache_miss = utils.get_setting('CHECK_CACHE_MISS')
     source_generators = None
     thumbnail_processors = None
 
@@ -249,9 +254,33 @@ class Thumbnailer(File):
             thumbnail_storage=None, remote_source=False, *args, **kwargs):
         super(Thumbnailer, self).__init__(file, name, *args, **kwargs)
         self.source_storage = source_storage or default_storage
-        self.thumbnail_storage = (thumbnail_storage or
-            DEFAULT_THUMBNAIL_STORAGE)
+        if not thumbnail_storage:
+            thumbnail_storage = get_storage_class(
+                settings.THUMBNAIL_DEFAULT_STORAGE)()
+        self.thumbnail_storage = thumbnail_storage
         self.remote_source = remote_source
+        self.alias_target = None
+
+        # Set default properties. For backwards compatibilty, check to see
+        # if the attribute exists already (it could be set as a class property
+        # on a subclass) before getting it from settings.
+        for default in ('basedir', 'subdir', 'prefix', 'quality', 'extension',
+                'preserve_extensions', 'transparency_extension',
+                'check_cache_miss'):
+            attr_name = 'thumbnail_%s' % default
+            if getattr(self, attr_name, None) is None:
+                value = getattr(settings, attr_name.upper())
+                setattr(self, attr_name, value)
+
+    def __getitem__(self, alias):
+        """
+        Retrieve a thumbnail matching the alias options (or raise a
+        ``KeyError`` if no such alias exists).
+        """
+        options = aliases.get(alias, target=self.alias_target)
+        if not options:
+            raise KeyError(alias)
+        return self.get_thumbnail(options)
 
     def generate_source_image(self, thumbnail_options):
         return engine.generate_source_image(self, thumbnail_options,
@@ -274,13 +303,14 @@ class Thumbnailer(File):
         quality = thumbnail_options.get('quality', self.thumbnail_quality)
 
         filename = self.get_thumbnail_name(thumbnail_options,
-                            transparent=utils.is_transparent(thumbnail_image))
+            transparent=utils.is_transparent(thumbnail_image))
 
         data = engine.save_image(thumbnail_image, filename=filename,
-                                 quality=quality).read()
+            quality=quality).read()
 
-        thumbnail = ThumbnailFile(filename, ContentFile(data),
-                                  storage=self.thumbnail_storage)
+        thumbnail = ThumbnailFile(filename, file=ContentFile(data),
+            storage=self.thumbnail_storage,
+            thumbnail_options=thumbnail_options)
         thumbnail.image = thumbnail_image
         thumbnail._committed = False
 
@@ -352,13 +382,14 @@ class Thumbnailer(File):
             names = (opaque_name, transparent_name)
         for filename in names:
             if self.thumbnail_exists(filename):
-                thumbnail = ThumbnailFile(name=filename,
-                                          storage=self.thumbnail_storage)
-                return thumbnail
+                return ThumbnailFile(name=filename,
+                    storage=self.thumbnail_storage,
+                    thumbnail_options=thumbnail_options)
 
         thumbnail = self.generate_thumbnail(thumbnail_options)
         if save:
             save_thumbnail(thumbnail, self.thumbnail_storage)
+            signals.thumbnail_created.send(sender=thumbnail)
             # Ensure the right thumbnail name is used based on the transparency
             # of the image.
             filename = (utils.is_transparent(thumbnail.image) and
@@ -457,6 +488,7 @@ class ThumbnailerFieldFile(FieldFile, Thumbnailer):
         thumbnail_storage = getattr(self.field, 'thumbnail_storage', None)
         if thumbnail_storage:
             self.thumbnail_storage = thumbnail_storage
+        self.alias_target = self
 
     def save(self, name, content, *args, **kwargs):
         """

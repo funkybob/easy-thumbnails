@@ -1,7 +1,8 @@
 from os import path
 
-from easy_thumbnails import files, utils
+from easy_thumbnails import files, utils, signals
 from easy_thumbnails.tests import utils as test_utils
+from easy_thumbnails.conf import settings
 try:
     from PIL import Image
 except ImportError:
@@ -110,3 +111,33 @@ class FilesTest(test_utils.BaseTest):
         self.ext_thumbnailer.thumbnail_preserve_extensions = ('foo', 'jpg')
         thumb = self.ext_thumbnailer.get_thumbnail({'size': (100, 100)})
         self.assertEqual(path.splitext(thumb.name)[1], '.jpg')
+
+    def test_USE_TZ(self):
+        settings.USE_TZ = True
+        self.thumbnailer.get_thumbnail({'size': (10, 20)})
+
+        settings.USE_TZ = False
+        self.thumbnailer.get_thumbnail({'size': (20, 40)})
+
+    def test_thumbnailfile_options(self):
+        opts = {'size': (50, 50), 'crop': True, 'upscale': True}
+        thumb = self.thumbnailer.get_thumbnail(opts)
+        self.assertEqual(thumb.thumbnail_options, opts)
+
+    def test_default_options_setting(self):
+        settings.THUMBNAIL_DEFAULT_OPTIONS = {'crop': True}
+        opts = {'size': (50, 50)}
+        thumb = self.thumbnailer.get_thumbnail(opts)
+        self.assertEqual((thumb.width, thumb.height), (50, 50))
+
+    def test_thumbnail_created_signal(self):
+
+        def signal_handler(sender, *args, **kwargs):
+            sender.signal_received = True
+
+        signals.thumbnail_created.connect(signal_handler)
+        try:
+            thumb = self.thumbnailer.get_thumbnail({'size': (10, 20)})
+            self.assertTrue(hasattr(thumb, 'signal_received'))
+        finally:
+            signals.thumbnail_created.disconnect(signal_handler)

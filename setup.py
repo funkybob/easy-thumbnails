@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 from distutils.core import setup
-from easy_thumbnails import get_version
+import easy_thumbnails
 
 
 def read_files(*filenames):
     """
     Output the contents of one or more files to a single concatenated string.
-
     """
     output = []
     for filename in filenames:
@@ -15,16 +14,15 @@ def read_files(*filenames):
             output.append(f.read())
         finally:
             f.close()
-    return '\n'.join(output)
+    return '\n\n'.join(output)
 
 
 setup(
     name='easy-thumbnails',
-    version=get_version(join='-'),
+    version=easy_thumbnails.VERSION,
     url='http://github.com/SmileyChris/easy-thumbnails',
-    #download_url='',
     description='Easy thumbnails for Django',
-    long_description=read_files('README.rst'),
+    long_description=read_files('README.rst', 'CHANGES.rst'),
     author='Chris Beaven',
     author_email='smileychris@gmail.com',
     platforms=['any'],
@@ -36,9 +34,9 @@ setup(
         'easy_thumbnails.templatetags',
         'easy_thumbnails.tests',
     ],
-    package_data={'easy_thumbnails': ['docs/*', 'docs/ref/*.txt']},
+    package_data={'easy_thumbnails': ['docs/*', 'docs/ref/*.rst']},
     classifiers=[
-        'Development Status :: 3 - Alpha',
+        'Development Status :: 5 - Production/Stable',
         'Environment :: Web Environment',
         'Framework :: Django',
         'Intended Audience :: Developers',

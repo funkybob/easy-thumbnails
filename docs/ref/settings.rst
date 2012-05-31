@@ -150,3 +150,19 @@ THUMBNAIL_CHECK_CACHE_MISS
 
 	Switch this to True if your easy_thumbnails_thumbnail table has been wiped
 	but your storage still has the thumbnail files.
+
+THUMBNAIL_DEFAULT_OPTIONS
+	Default: ``None``
+
+	Set this to a dictionary of options to provide as the default for all
+	thumbnail calls. For example, to make all images greyscale::
+
+		THUMBNAIL_DEFAULT_OPTIONS = {'bw': True}
+
+.. _setting-thumbnail_aliases:
+
+THUMBNAIL_ALIASES
+	Default: ``None``
+
+	A dictionary of predefined alias options for different targets. See the
+	:ref:`usage documentation <thumbnail-aliases>` for details.
